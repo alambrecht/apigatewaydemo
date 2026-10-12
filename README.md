@@ -15,7 +15,7 @@
 
 | Piece | Tech | License | Job |
 |---|---|---|---|
-| Gateway | KrakenD CE 3.0 | Apache 2.0 | Single entry point; rejects bad tokens and wrong roles at the edge; rate-limits login |
+| Gateway | KrakenD 3.0 | Apache 2.0 | Single entry point; rejects bad tokens and wrong roles at the edge; rate-limits login |
 | Auth service | ASP.NET Core 10 (.NET 10, Alpine image) | MIT | **Authentication**: verifies passwords, issues signed tokens that say who you are and which roles you have |
 | Demo API | ASP.NET Core 10 (.NET 10, Alpine image) | MIT | Dummy business endpoints; **authorization** with role policies |
 
