@@ -1,0 +1,99 @@
+{
+  "$schema": "https://www.krakend.io/schema/v3.0/krakend.json",
+  "version": 4,
+  "name": "demo-gateway",
+  "port": 8080,
+  "timeout": "5s",
+  "endpoints": [
+    {
+      "@comment": "LOGIN: forwarded to the auth service. Rate limited to slow down password guessing.",
+      "endpoint": "/auth/login",
+      "method": "POST",
+      "output_encoding": "no-op",
+      "input_headers": ["Content-Type"],
+      "extra_config": {
+        "qos/ratelimit/router": {
+          "max_rate": 20,
+          "client_max_rate": 3,
+          "strategy": "ip"
+        }
+      },
+      "backend": [
+        { "host": ["http://auth:8080"], "url_pattern": "/login", "encoding": "no-op" }
+      ]
+    },
+    {
+      "@comment": "PUBLIC: no token required",
+      "endpoint": "/api/public",
+      "method": "GET",
+      "output_encoding": "no-op",
+      "backend": [
+        { "host": ["http://api:8080"], "url_pattern": "/public", "encoding": "no-op" }
+      ]
+    },
+    {
+      "@comment": "ANY LOGGED-IN USER: valid token, no specific role",
+      "endpoint": "/api/me",
+      "method": "GET",
+      "output_encoding": "no-op",
+      "input_headers": ["Authorization"],
+      "extra_config": {
+        "auth/validator": {
+          "alg": "RS256",
+          "jwk_url": "http://auth:8080/.well-known/jwks.json",
+          "disable_jwk_security": true,
+          "issuer": "http://auth:8080",
+          "audience": ["demo-api"],
+          "cache": true
+        }
+      },
+      "backend": [
+        { "host": ["http://api:8080"], "url_pattern": "/me", "encoding": "no-op" }
+      ]
+    },
+    {
+      "@comment": "ROLE 'reader' required",
+      "endpoint": "/api/items",
+      "method": "GET",
+      "output_encoding": "no-op",
+      "input_headers": ["Authorization"],
+      "extra_config": {
+        "auth/validator": {
+          "alg": "RS256",
+          "jwk_url": "http://auth:8080/.well-known/jwks.json",
+          "disable_jwk_security": true,
+          "issuer": "http://auth:8080",
+          "audience": ["demo-api"],
+          "roles_key": "roles",
+          "roles": ["reader"],
+          "cache": true
+        }
+      },
+      "backend": [
+        { "host": ["http://api:8080"], "url_pattern": "/items", "encoding": "no-op" }
+      ]
+    },
+    {
+      "@comment": "ROLE 'admin' required",
+      "endpoint": "/api/admin/stats",
+      "method": "GET",
+      "output_encoding": "no-op",
+      "input_headers": ["Authorization"],
+      "extra_config": {
+        "auth/validator": {
+          "alg": "RS256",
+          "jwk_url": "http://auth:8080/.well-known/jwks.json",
+          "disable_jwk_security": true,
+          "issuer": "http://auth:8080",
+          "audience": ["demo-api"],
+          "roles_key": "roles",
+          "roles": ["admin"],
+          "cache": true
+        }
+      },
+      "backend": [
+        { "host": ["http://api:8080"], "url_pattern": "/admin/stats", "encoding": "no-op" }
+      ]
+    }
+  ]
+}

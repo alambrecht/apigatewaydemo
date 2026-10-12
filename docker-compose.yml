@@ -1,0 +1,46 @@
+services:
+  # ---------------------------------------------------------------
+  # API gateway: the ONLY published port. Validates JWTs and roles
+  # at the edge before anything reaches the services behind it.
+  # ---------------------------------------------------------------
+  gateway:
+    image: krakend:3.0.0
+    volumes:
+      - ./gateway/krakend.json:/etc/krakend/krakend.json:ro
+    ports:
+      - "8000:8080"
+    depends_on:
+      - auth
+      - api
+    restart: on-failure   # retries until the auth service is up to serve its keys
+
+  # ---------------------------------------------------------------
+  # Auth service (.NET 10): checks passwords, issues signed JWTs,
+  # publishes its public key at /.well-known/jwks.json
+  # ---------------------------------------------------------------
+  auth:
+    build: ./auth
+    environment:
+      Auth__Issuer: http://auth:8080        # goes into every token's "iss"
+      Auth__Audience: demo-api              # goes into every token's "aud"
+      Auth__TokenMinutes: "15"
+      Auth__KeyPath: /keys/signing-key.pem
+    volumes:
+      - auth-keys:/keys                     # private key survives restarts
+    # no "ports:" — reachable only inside the Docker network
+
+  # ---------------------------------------------------------------
+  # Demo API (.NET 10): dummy endpoints. Re-validates every token
+  # (defense in depth) using the auth service's public key.
+  # ---------------------------------------------------------------
+  api:
+    build: ./api
+    environment:
+      Auth__Authority: http://auth:8080     # where to find discovery + public keys
+      Auth__Audience: demo-api
+    depends_on:
+      - auth
+    # no "ports:" — reachable only inside the Docker network
+
+volumes:
+  auth-keys:
