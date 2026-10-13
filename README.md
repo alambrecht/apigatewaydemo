@@ -1,17 +1,28 @@
-# API Gateway Example
+# API Gateway Demo — JWT Authentication & Authorization
 
-```
-                         ┌──────────────── Docker network ────────────────┐
-                         │                                                │
- you ──► KrakenD :8000 ──┼── POST /auth/login ──────────► auth service    │
- (curl)  gateway         │                                • checks password
-         • validates JWT │                                • signs JWT (private key)
-         • checks role   │          fetches public key ◄─ • /.well-known/jwks.json
-                         │                                                │
-                         └── GET /api/... (+ token) ────► demo API        │
-                                                          • validates JWT again
-                                                          • checks role policy
-```
+![.NET](https://img.shields.io/badge/.NET_10-512BD4?logo=dotnet&logoColor=white)
+![C#](https://img.shields.io/badge/C%23-239120)
+![KrakenD](https://img.shields.io/badge/KrakenD_3.0-0C1C2C)
+![Docker](https://img.shields.io/badge/Docker_Compose-2496ED?logo=docker&logoColor=white)
+![JWT](https://img.shields.io/badge/JWT_RS256-000000?logo=jsonwebtokens&logoColor=white)
+
+A small, hands-on demo of how an API gateway, an auth service and a backend API work together. A KrakenD gateway checks JWTs and roles at the edge. A .NET auth service issues the tokens, and a .NET demo API checks them a second time. Everything runs with one `docker compose` command.
+
+---
+
+## Features
+
+- **Single entry point**: only the gateway publishes a port. The auth service and the API can't be reached from outside Docker.
+- **Authentication**: the auth service checks PBKDF2-hashed passwords and issues RS256-signed JWTs. It builds the JWT by hand so you can see exactly how one is made.
+- **Authorization**: the gateway and the API both enforce role-based access (`reader`, `admin`).
+- **Defense in depth**: the API re-validates every token, so a misrouted request that skips the gateway is still rejected.
+- **Public-key trust**: signing keys are published at `/.well-known/jwks.json`. No shared secrets.
+- **Login rate limiting**: the gateway throttles brute-force attempts on `/auth/login`.
+- **Persistent signing key**: the RSA key is stored in a Docker volume, so tokens survive restarts.
+
+---
+
+## Tech Stack
 
 | Piece | Tech | License | Job |
 |---|---|---|---|
@@ -19,27 +30,104 @@
 | Auth service | ASP.NET Core 10 (.NET 10, Alpine image) | MIT | **Authentication**: verifies passwords, issues signed tokens that say who you are and which roles you have |
 | Demo API | ASP.NET Core 10 (.NET 10, Alpine image) | MIT | Dummy business endpoints; **authorization** with role policies |
 
-Only the gateway publishes a port. The auth service and the API can't be reached from outside.
+---
 
-## Run it
+## Quick Start
 
-Requires Docker with Compose v2. You only need the .NET 10 SDK to build the services outside Docker.
+### Prerequisites
 
+- Docker with Compose v2
+- `curl` and `jq` (for the examples below)
+- .NET 10 SDK, only if you want to build the services outside Docker
+
+### Run it
+
+**Clone the repository**
+```bash
+git clone https://github.com/alambrecht/apigatewaydemo.git
+cd apigatewaydemo
+```
+
+**Start everything**
 ```bash
 docker compose up -d --build   # build and start everything in the background
 docker compose logs -f gateway # follow the gateway logs
 docker compose down            # stop (add -v to also delete the signing key)
 ```
 
-The gateway may restart once or twice while the auth service starts up. That's expected: it can't start until the auth service is serving its public keys.
+The gateway is available at http://localhost:8000.
 
-On startup the gateway logs `header propagation is disabled because there is no propagate_claims attribute` for each protected route. This is harmless. The gateway doesn't forward token claims as headers because the API reads the token itself.
+> [!NOTE]
+> The gateway may restart once or twice while the auth service starts up. That's expected: it can't start until the auth service is serving its public keys.
+>
+> On startup the gateway logs `header propagation is disabled because there is no propagate_claims attribute` for each protected route. This is harmless. The gateway doesn't forward token claims as headers because the API reads the token itself.
 
-## Try it
+---
 
-Full endpoint reference: [API.md](API.md).
+## Repository Structure
 
-Users (in `auth/UserStore.cs`): **alice / alice** (reader), **bob / bob** (reader, admin).
+```bash
+/apigatewaydemo
+├── /auth
+│   ├── Program.cs           # Login endpoint, token claims, discovery + JWKS endpoints
+│   ├── SigningKey.cs        # RSA key load/create, JWT construction and signing
+│   ├── UserStore.cs         # In-memory users with PBKDF2-hashed passwords
+│   └── Dockerfile
+├── /api
+│   ├── Program.cs           # JwtBearer setup, role policies, dummy endpoints
+│   └── Dockerfile
+├── /gateway
+│   └── krakend.json         # Routes, token validation, role checks, login rate limit
+│                            # (KrakenD 3 config format: "version": 4)
+├── /docs
+│   └── architecture.svg     # Architecture diagram
+├── docker-compose.yml       # Wires the three services + the auth-keys volume
+├── API.md                   # Full endpoint reference
+└── README.md
+```
+
+Each service folder also has a `.dockerignore` that keeps local `bin/` and `obj/` out of the image builds.
+
+---
+
+## Architecture Overview
+
+![Architecture: the client calls the KrakenD gateway on port 8000. Inside the Docker network, the gateway forwards logins to the auth service and API calls to the demo API. The auth service publishes its public key (JWKS) to both the gateway and the API.](docs/architecture.svg)
+
+### How the pieces trust each other
+
+1. The auth service generates an RSA key pair on first start and saves the private key to the `auth-keys` volume (`chmod 600`), so tokens survive restarts.
+2. `/login` builds a JWT by hand (see `auth/SigningKey.cs`): `base64url(header).base64url(payload)`, signed with RS256 using the private key. Reading that file is the best way to see what a JWT really is.
+3. The **public** key is published at `/.well-known/jwks.json`. Neither KrakenD nor the API ever sees the private key or shares a secret.
+4. KrakenD fetches the JWKS and checks signature, `iss`, `aud`, `exp` and the route's required role.
+5. The demo API reads `/.well-known/openid-configuration` (a minimal one the auth service serves) to find the same keys, and checks everything again with ASP.NET Core's standard `JwtBearer` handler.
+
+---
+
+## API Endpoints
+
+All requests go through the gateway at `http://localhost:8000`. Full reference: [API.md](API.md).
+
+| Endpoint | Method | Auth | Required role | Description |
+|---|---|---|---|---|
+| `/auth/login` | POST | none | — | Exchange a username and password for an access token |
+| `/api/public` | GET | none | — | Public endpoint |
+| `/api/me` | GET | Bearer token | any | Show the identity inside your token |
+| `/api/items` | GET | Bearer token | `reader` | List items |
+| `/api/admin/stats` | GET | Bearer token | `admin` | Admin statistics |
+
+### Test users
+
+Defined in `auth/UserStore.cs`:
+
+| Username | Password | Roles |
+|---|---|---|
+| `alice` | `alice` | `reader` |
+| `bob` | `bob` | `reader`, `admin` |
+
+---
+
+## Try It
 
 ```bash
 # Public — no token → 200
@@ -71,32 +159,30 @@ curl -i -X POST http://localhost:8000/auth/login -H "Content-Type: application/j
 
 Paste a token into https://jwt.io to see its header (`alg`, `kid`) and payload (`iss`, `aud`, `sub`, `roles`, `exp`).
 
-Things to try:
+### Things to try
+
 - **Forge a token.** Decode alice's token, change `roles` to `["admin"]`, re-encode it and send it. The signature no longer matches, so you get a 401.
 - **Bypass the gateway** (simulates a misconfigured network): `docker compose exec gateway wget -qO- http://api:8080/items`. The API still answers 401, because it checks tokens itself.
 - **Hammer the login.** Each IP gets a burst of 3 login attempts, then 2 per second. Past that, the gateway answers 429 Too Many Requests. Failed logins are deliberately slow (password hashing), so send them in parallel or quickly to hit the limit.
 
-## How the pieces trust each other
+---
 
-1. The auth service generates an RSA key pair on first start and saves the private key to the `auth-keys` volume (`chmod 600`), so tokens survive restarts.
-2. `/login` builds a JWT by hand (see `auth/SigningKey.cs`): `base64url(header).base64url(payload)`, signed with RS256 using the private key. Reading that file is the best way to see what a JWT really is.
-3. The **public** key is published at `/.well-known/jwks.json`. Neither KrakenD nor the API ever sees the private key or shares a secret.
-4. KrakenD fetches the JWKS and checks signature, `iss`, `aud`, `exp` and the route's required role.
-5. The demo API reads `/.well-known/openid-configuration` (a minimal one the auth service serves) to find the same keys, and checks everything again with ASP.NET Core's standard `JwtBearer` handler.
+## Environment Variables
 
-## Where things live
+Set in `docker-compose.yml`:
 
-```
-auth/Program.cs        login endpoint, token claims, discovery + JWKS endpoints
-auth/SigningKey.cs     RSA key load/create, JWT construction and signing
-auth/UserStore.cs      in-memory users with PBKDF2-hashed passwords
-api/Program.cs         JwtBearer setup, role policies, dummy endpoints
-gateway/krakend.json   routes, token validation, role checks, login rate limit
-                       (KrakenD 3 config format: "version": 4)
-*/.dockerignore        keeps local bin/ and obj/ out of the image builds
-```
+| Service | Variable | Value | Description |
+|---|---|---|---|
+| auth | `Auth__Issuer` | `http://auth:8080` | Goes into every token's `iss` |
+| auth | `Auth__Audience` | `demo-api` | Goes into every token's `aud` |
+| auth | `Auth__TokenMinutes` | `15` | Token lifetime |
+| auth | `Auth__KeyPath` | `/keys/signing-key.pem` | Where the private signing key is stored |
+| api | `Auth__Authority` | `http://auth:8080` | Where to find discovery + public keys |
+| api | `Auth__Audience` | `demo-api` | Audience the API expects |
 
-## Learning-only shortcuts (don't ship these)
+---
+
+## Learning-Only Shortcuts (Don't Ship These)
 
 - Plain HTTP everywhere (`RequireHttpsMetadata = false`, `disable_jwk_security`). Put TLS on the gateway.
 - Users are hard-coded in memory. Real version: a SQL Server table via ASP.NET Core Identity + EF Core.

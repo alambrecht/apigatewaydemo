@@ -1,0 +1,19 @@
+# .NET build output
+bin/
+obj/
+
+# IDEs and editors
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local secrets and environment overrides
+.env
+*.pem
